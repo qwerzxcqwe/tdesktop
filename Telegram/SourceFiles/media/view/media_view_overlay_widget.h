@@ -232,6 +232,7 @@ private:
 	bool handleDoubleClick(QPoint position, Qt::MouseButton button);
 	bool handleTouchEvent(not_null<QTouchEvent*> e);
 	void handleWheelEvent(not_null<QWheelEvent*> e);
+	void handlePendingWheelNavigation();
 	bool handleNativeGesture(not_null<QNativeGestureEvent*> e);
 	void setupSwipeNavigation();
 	void handleKeyPress(not_null<QKeyEvent*> e);
@@ -869,6 +870,7 @@ private:
 	Ui::Animations::Simple _speedBoostAnimation;
 	base::Timer _speedBoostHoldTimer;
 	base::Timer _frameStepThrottle;
+	base::Timer _wheelNavigationThrottle;
 	int _frameStepPending = 0;
 	Ui::Animations::Basic _speedBoostTicker;
 	float64 _speedBoostPhase = 0.;
@@ -882,6 +884,7 @@ private:
 	rpl::event_stream<bool> _touchbarFullscreenToggled;
 
 	int _verticalWheelDelta = 0;
+	int _verticalZoomDelta = 0;
 	float64 _pinchZoomAccumulated = 0.;
 	bool _zoomAtLimit = false;
 	bool _swipeNavigating = false;

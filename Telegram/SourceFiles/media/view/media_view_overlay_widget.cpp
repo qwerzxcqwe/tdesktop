@@ -191,6 +191,7 @@ constexpr auto kSeekTimeMs = 5 * crl::time(1000);
 constexpr auto kSeekTimeMsLong = 10 * crl::time(1000);
 constexpr auto kFrameStepFallbackFps = 30.;
 constexpr auto kFrameStepThrottleMs = crl::time(150);
+constexpr auto kWheelNavigationThrottleMs = crl::time(150);
 
 // macOS OpenGL renderer fails to render larger texture
 // even though it reports that max texture size is 16384.
@@ -707,6 +708,10 @@ OverlayWidget::OverlayWidget()
 
 	_frameStepThrottle.setCallback([=] {
 		flushPendingFrameStep();
+	});
+
+	_wheelNavigationThrottle.setCallback([=] {
+		handlePendingWheelNavigation();
 	});
 
 	_docRectImage = QImage(
@@ -7459,33 +7464,54 @@ void OverlayWidget::handleWheelEvent(not_null<QWheelEvent*> e) {
 	const auto angle = e->angleDelta();
 	if (_swipeNavigating || std::abs(angle.x()) > std::abs(angle.y())) {
 		_verticalWheelDelta = 0;
+		_wheelNavigationThrottle.cancel();
 		return;
 	}
 	const auto acceptForJump = !_stories
 		&& ((e->source() == Qt::MouseEventNotSynthesized)
 			|| (e->source() == Qt::MouseEventSynthesizedBySystem));
-	const auto anchor = zoomAnchor(e->globalPosition());
 	const auto zoom = e->modifiers().testFlag(Qt::ControlModifier);
-	// Scroll speed settings should not skip media in a single wheel event.
-	_verticalWheelDelta += zoom
-		? angle.y()
-		: std::clamp(angle.y(), -step, step);
-	while (std::abs(_verticalWheelDelta) >= step) {
-		if (_verticalWheelDelta < 0) {
-			_verticalWheelDelta += step;
-			if (zoom) {
+	if (zoom) {
+		const auto anchor = zoomAnchor(e->globalPosition());
+		_verticalZoomDelta += angle.y();
+		while (std::abs(_verticalZoomDelta) >= step) {
+			if (_verticalZoomDelta < 0) {
+				_verticalZoomDelta += step;
 				zoomOut(anchor);
-			} else if (acceptForJump) {
-				moveToNext(1);
-			}
-		} else {
-			_verticalWheelDelta -= step;
-			if (zoom) {
+			} else {
+				_verticalZoomDelta -= step;
 				zoomIn(anchor);
-			} else if (acceptForJump) {
-				moveToNext(-1);
 			}
 		}
+		return;
+	}
+	if (!acceptForJump) {
+		_verticalWheelDelta = 0;
+		_wheelNavigationThrottle.cancel();
+		return;
+	}
+	_verticalWheelDelta += angle.y();
+	if (!_wheelNavigationThrottle.isActive()) {
+		handlePendingWheelNavigation();
+	}
+	if (std::abs(_verticalWheelDelta) >= step) {
+		_wheelNavigationThrottle.callOnce(kWheelNavigationThrottleMs);
+	}
+}
+
+void OverlayWidget::handlePendingWheelNavigation() {
+	constexpr auto step = int(QWheelEvent::DefaultDeltasPerStep);
+	if (std::abs(_verticalWheelDelta) < step) {
+		return;
+	}
+	const auto direction = (_verticalWheelDelta < 0) ? 1 : -1;
+	_verticalWheelDelta += direction * step;
+	if (!moveToNext(direction)) {
+		_verticalWheelDelta = 0;
+		return;
+	}
+	if (std::abs(_verticalWheelDelta) >= step) {
+		_wheelNavigationThrottle.callOnce(kWheelNavigationThrottleMs);
 	}
 }
 
@@ -7504,6 +7530,8 @@ void OverlayWidget::setupSwipeNavigation() {
 	auto update = [=](Ui::Controls::SwipeContextData data) {
 		_swipeNavigating = (data.translation != 0);
 		if (data.translation != 0) {
+			_verticalWheelDelta = 0;
+			_wheelNavigationThrottle.cancel();
 			const auto mirrored = (data.translation < 0);
 			if (!state->back.callback || state->mirrored != mirrored) {
 				state->back = Ui::Controls::SetupSwipeBack(
